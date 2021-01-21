@@ -1,0 +1,318 @@
+---
+apiVersion: xl-release/v1
+kind: Templates
+spec:
+- directory: Demo
+  children:
+  - template: Template Manual Release - DemoWebapp
+    description: Exemple de template de livraison
+    scheduledStartDate: 2019-06-25T09:00:00+02:00
+    dueDate: 2020-11-02T18:08:08.364+01:00
+    phases:
+    - phase: Init
+      tasks:
+      - name: Init Jira Query
+        type: xlrelease.ScriptTask
+        script: |-
+          IDs = releaseVariables['jiraIDs']
+          IDsString = ','.join(IDs)
+          query = 'project = "WEB" AND ID in (' + IDsString + ') ORDER BY created DESC'
+          releaseVariables['jiraQuery'] = query
+      - name: Get JIra items
+        type: jira.Query
+        jiraServer: Jira Cloud
+        query: ${jiraQuery}
+        taskFailureHandlerEnabled: true
+        taskRecoverOp: SKIP_TASK
+        variableMapping:
+          pythonScript.issues: ${jiraItems}
+      - name: Get last version of the app
+        type: xld.GetLatestVersion
+        server: XL Deploy
+        applicationId: Applications/3-Tier/Java/DemoWebApp
+        variableMapping:
+          pythonScript.packageId: ${appLastestVersion}
+      - name: Set appNewVersion
+        type: xlrelease.ScriptTask
+        script: |-
+          version = releaseVariables['appLastestVersion'].split('/')[-1]
+          releaseVariables['appLastestVersion'] = version
+          releaseVariables['appNewVersion'] = str(float(version) + 0.01)
+      - name: Check code compliance
+        type: sonar.checkCompliance
+        sonarServer: Sonar-Docker
+        resource: demowebapp
+      color: '#991C71'
+    - phase: Build
+      dueDate: 2019-06-29T00:00:00+02:00
+      plannedDuration: 313200
+      tasks:
+      - name: Build the application for '${appNewVersion}'
+        type: jenkins.Build
+        jenkinsServer: Jenkins local
+        jobName: DemoWebApp
+        jobParameters: version=${appNewVersion}
+        taskFailureHandlerEnabled: true
+        taskRecoverOp: RUN_SCRIPT
+        variableMapping:
+          pythonScript.buildStatus: ${jenkinsBuildStatus}
+          pythonScript.buildNumber: ${jenkinsBuildNumber}
+      - name: Deploy To Dev
+        type: xldeploy.Deploy
+        server: Localhost
+        deploymentPackage: Applications/3-Tier/Java/DemoWebApp/${appNewVersion}
+        deploymentEnvironment: Environments/Dev/Dev
+        rollbackOnFailure: false
+        facets:
+        - type: udm.DeploymentTaskFacet
+          version: ""
+          application: Demo Web App
+          environment: Dev
+        taskFailureHandlerEnabled: true
+        taskRecoverOp: RUN_SCRIPT
+        tags:
+        - XLDeploy
+      color: '#0099CC'
+    - phase: Test
+      dueDate: 2019-07-03T00:00:00+02:00
+      plannedDuration: 345600
+      tasks:
+      - name: Complete the Release Notes
+        type: xlrelease.UserInputTask
+        plannedDuration: 129600
+        team: QA
+        variables:
+        - releaseNotes
+      - name: Broadcast the release note to the QA Team
+        type: xlrelease.NotificationTask
+        addresses:
+        - qa@localhost.com
+        subject: Release Note for version  is ready
+        body: Release Note for version  is ready
+      - name: Release Notes are ok
+        type: xld.UpdateCIProperty
+        server: Localhost
+        ciID: Applications/3-Tier/Java/DemoWebApp/${appNewVersion}
+        ciProperty: satisfiesReleaseNotes
+        propertyValue: "true"
+      - name: Deploy To Test
+        type: xldeploy.Deploy
+        server: Localhost
+        deploymentPackage: Applications/3-Tier/Java/DemoWebApp/${appNewVersion}
+        deploymentEnvironment: Environments/Test/Test
+        facets:
+        - type: udm.DeploymentTaskFacet
+          version: ""
+          application: Demo Web App
+          environment: Test
+        tags:
+        - XLDeploy
+      - name: Notify Jira move to 'In Test'
+        type: jira.UpdateIssues
+        jiraServer: Jira Cloud
+        newStatus: In Test
+        comment: Status changed to 'In Test' by XL Release
+        variableMapping:
+          pythonScript.issues: ${jiraItems}
+      - name: Execute the tests
+        type: xlrelease.ParallelGroup
+        tasks:
+        - name: Integration Tests
+          type: tests.IntegrationTests
+        - name: Performance Tests
+          type: tests.PerformanceTests
+      - name: Tests Validation
+        type: xlrelease.Task
+        plannedDuration: 126000
+        team: QA
+      - name: Tests are OK
+        type: xld.UpdateCIProperty
+        server: Localhost
+        ciID: Applications/3-Tier/Java/DemoWebApp/${appNewVersion}
+        ciProperty: satisfiesPerformanceTested
+        propertyValue: "true"
+      color: '#FD8D10'
+    - phase: QA
+      dueDate: 2019-07-07T00:00:00+02:00
+      plannedDuration: 345600
+      tasks:
+      - name: Deploy To QA
+        type: xldeploy.Deploy
+        server: Localhost
+        deploymentPackage: Applications/3-Tier/Java/DemoWebApp/${appNewVersion}
+        deploymentEnvironment: Environments/QA/QA
+        facets:
+        - type: udm.DeploymentTaskFacet
+          version: ""
+          application: Demo Web App
+          environment: Acceptance
+      - name: Run the Functional Tests
+        type: tests.FunctionalTests
+      - name: QA Validation
+        type: xlrelease.Task
+        plannedDuration: 126000
+        team: QA
+      - name: Set Jira items to 'Done'
+        type: jira.UpdateIssues
+        jiraServer: Jira Cloud
+        newStatus: Done
+        comment: Status changed to 'Done' by XL Release
+        variableMapping:
+          pythonScript.issues: ${jiraItems}
+      color: '#08B153'
+    - phase: Production
+      dueDate: 2019-07-11T00:00:00+02:00
+      plannedDuration: 345600
+      tasks:
+      - name: Create New ticket in the Change Management System
+        type: servicenow.CreateChangeRequest
+        servicenowServer: Service Now SE Demo instance
+        username: ops
+        shortDescription: PetPortal in Production
+        taskFailureHandlerEnabled: true
+        taskRecoverOp: SKIP_TASK
+        variableMapping:
+          pythonScript.Ticket: ${productionJIRA}
+          pythonScript.sysId: ${sysid}
+      - name: Update ticket in XLD
+        type: xld.UpdateCIProperty
+        server: Localhost
+        ciID: Applications/3-Tier/Java/DemoWebApp/${appNewVersion}
+        ciProperty: satisfiesChangeTicketNumberProd
+        propertyValue: ${productionJIRA}
+      - name: Approve
+        type: xlrelease.ParallelGroup
+        locked: true
+        tasks:
+        - name: GO \\\/ NOGO from the production team
+          type: xlrelease.GateTask
+          plannedDuration: 172800
+          team: Managers
+          locked: true
+          conditions:
+          - name: Marketing OK
+            type: xlrelease.GateCondition
+        - name: GO \\\/ NOGO from the marketing team
+          type: xlrelease.GateTask
+          plannedDuration: 172800
+          team: Managers
+          locked: true
+      - name: Wait for approbation in SNOW
+        type: servicenow.RequestApproval
+        servicenowServer: Service Now SE Demo instance
+        shortDescription: Go to Prod
+        ^description: Go to Prod
+        taskFailureHandlerEnabled: true
+        taskRecoverOp: SKIP_TASK
+      - name: Deploy To Production
+        type: xldeploy.Deploy
+        server: Localhost
+        deploymentPackage: Applications/3-Tier/Java/DemoWebApp/${appNewVersion}
+        deploymentEnvironment: Environments/Prod/Prod
+        facets:
+        - type: udm.DeploymentTaskFacet
+          version: ""
+          application: Demo Web App
+          environment: Production
+        tags:
+        - XLDeploy
+      - name: 'Close  CR : Deployment Done'
+        type: servicenow.UpdateChangeRequest
+        servicenowServer: Service Now SE Demo instance
+        username: ops
+        taskFailureHandlerEnabled: true
+        taskRecoverOp: SKIP_TASK
+      color: '#D94C3D'
+    tags:
+    - Demo
+    - DemoWebApp
+    - XLDeploy
+    variables:
+    - type: xlrelease.StringVariable
+      key: releaseNotes
+      requiresValue: false
+      showOnReleaseStart: false
+      label: Release Notes
+    - type: xlrelease.StringVariable
+      key: productionJIRA
+      requiresValue: false
+      showOnReleaseStart: false
+      label: Jira for Production
+      value: TCK-1234
+    - type: xlrelease.StringVariable
+      key: sysid
+      requiresValue: false
+      showOnReleaseStart: false
+    - type: xlrelease.MapStringStringVariable
+      key: jiraItems
+      requiresValue: false
+      showOnReleaseStart: false
+      label: jira items retrieved from Jira
+      description: jira items retrieved from Jira
+    - type: xlrelease.StringVariable
+      key: jenkinsBuildNumber
+      requiresValue: false
+      showOnReleaseStart: false
+    - type: xlrelease.StringVariable
+      key: jenkinsBuildStatus
+      requiresValue: false
+      showOnReleaseStart: false
+    - type: xlrelease.StringVariable
+      key: appNewVersion
+      requiresValue: false
+      showOnReleaseStart: false
+    - type: xlrelease.StringVariable
+      key: appLastestVersion
+      requiresValue: false
+      showOnReleaseStart: false
+    - type: xlrelease.ListStringVariable
+      key: jiraIDs
+      label: IDs of jira items
+    - type: xlrelease.StringVariable
+      key: jiraQuery
+      requiresValue: false
+      showOnReleaseStart: false
+      value: project = "WEB"
+    scriptUsername: admin
+    scriptUserPassword: !value "xlrelease_Release_Template_Manual_Release___DemoWebapp_scriptUserPassword"
+    extensions:
+    - name: Dashboard
+      type: xlrelease.Dashboard
+      owner: admin
+      tiles:
+      - name: Release progress
+        type: xlrelease.ReleaseProgressTile
+        col: 0
+      - name: Release summary
+        type: xlrelease.ReleaseSummaryTile
+        row: 2
+        col: 2
+      - name: Resource usage
+        type: xlrelease.ResourceUsageTile
+        width: 1
+      - name: Release timeline
+        type: xlrelease.TimelineTile
+      - name: SonarQube analysis summary
+        type: sonar.SonarSummaryTile
+        row: 2
+        col: 1
+        width: 1
+        height: 1
+        resource: Matrix-extension
+        metrics:
+          lines: Lines
+          alert_status: Quality Gate Status
+          critical_violations: Critical Issues
+        sonarServer: Sonar-Docker
+      - name: JIRA issues
+        type: jira.JiraQueryTile
+        row: 0
+        col: 1
+        jiraServer: Jira Cloud
+        query: ${jiraQuery}
+      - name: Jenkins builds
+        type: xlrelease.JenkinsBuildsTile
+        row: 0
+        col: 2
+      parentTemplate: Applications/Foldere27134ba0d814df0a209435c0545ec24/Releasedf14fabb54774795b53b23511f4f08ee
+    riskProfile: Default risk profile
