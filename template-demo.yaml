@@ -2,7 +2,7 @@
 apiVersion: xl-release/v1
 kind: Templates
 spec:
-- directory: Demo
+- directory: Demo2
   children:
   - template: Template Manual Release - DemoWebapp
     description: Exemple de template de livraison
