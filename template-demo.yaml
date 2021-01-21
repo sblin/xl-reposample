@@ -2,10 +2,10 @@
 apiVersion: xl-release/v1
 kind: Templates
 spec:
-- directory: Demo2
+- directory: Demo
   children:
   - template: Template Manual Release - DemoWebapp
-    description: Exemple de template de livraison
+    description: Sample template
     scheduledStartDate: 2019-06-25T09:00:00+02:00
     dueDate: 2020-11-02T18:08:08.364+01:00
     phases:
